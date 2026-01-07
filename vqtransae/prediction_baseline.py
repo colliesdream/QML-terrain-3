@@ -352,6 +352,7 @@ def run_prediction_baseline(
 
     val_scores = compute_disagreement_score(base_val_preds, val_preds)
     test_scores = compute_disagreement_score(base_test_preds, test_preds)
+    val_score_stats = summarize_scores(val_scores)
 
     threshold = threshold_from_validation(np.array(val_scores), threshold_percentile)
     metrics = evaluate_test(test_scores, test_segments, test_labels, threshold)
@@ -366,14 +367,6 @@ def run_prediction_baseline(
     metrics['threshold'] = float(threshold)
     metrics['percentile_results'] = percentile_results
     metrics['best_percentile_result'] = best_percentile_result
-    metrics['per_time_scores'] = per_time_scores
-    val_score_stats = summarize_scores(val_scores)
-
-    threshold = threshold_from_validation(np.array(val_scores), threshold_percentile)
-    metrics = evaluate_test(test_scores, test_segments, test_labels, threshold)
-
-    per_time_scores = _assign_scores_to_timepoints(len(test_route), test_segments, test_scores)
-    metrics['threshold'] = float(threshold)
     metrics['per_time_scores'] = per_time_scores
     metrics['train_history'] = train_history
     metrics['val_score_stats'] = val_score_stats
