@@ -60,6 +60,17 @@ from .visualize import (
 )
 from .pipeline import run_complete_pipeline
 from .model_arch import VQTransAE
+from .prediction_baseline import (
+    segment_route,
+    build_dataset,
+    LSTMPredictor,
+    train_predictor,
+    generate_predicted_route,
+    compute_disagreement_score,
+    threshold_from_validation,
+    evaluate_test,
+    run_prediction_baseline
+)
 
 __all__ = [
     'Config',
@@ -70,5 +81,8 @@ __all__ = [
     'train_epoch', 'validate', 'train_model',
     'compute_scores', 'compute_composite_score', 'evaluate_with_threshold', 'evaluate_model',
     'plot_training_curves', 'plot_evaluation_results',
-    'run_complete_pipeline'
+    'run_complete_pipeline',
+    'segment_route', 'build_dataset', 'LSTMPredictor', 'train_predictor',
+    'generate_predicted_route', 'compute_disagreement_score',
+    'threshold_from_validation', 'evaluate_test', 'run_prediction_baseline'
 ]
