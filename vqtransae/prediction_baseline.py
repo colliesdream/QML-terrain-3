@@ -289,6 +289,26 @@ def evaluate_test(
     }
 
 
+def sweep_percentiles(
+    val_scores: np.ndarray,
+    test_scores: List[float],
+    test_segments: List[MotherSegment],
+    test_labels: np.ndarray,
+    percentiles: Iterable[float] = (50, 60, 70, 80, 90, 95, 97, 98, 99, 99.5),
+) -> Tuple[List[Dict[str, float]], Dict[str, float]]:
+    results: List[Dict[str, float]] = []
+    for pct in percentiles:
+        threshold = threshold_from_validation(val_scores, pct)
+        metrics = evaluate_test(test_scores, test_segments, test_labels, threshold)
+        results.append({
+            'percentile': float(pct),
+            'threshold': float(threshold),
+            **metrics
+        })
+    best = max(results, key=lambda x: x['f1']) if results else {}
+    return results, best
+
+
 def run_prediction_baseline(
     data_dir: str = Config.PROCESSED_DATA_DIR,
     length: int = 128,
@@ -333,6 +353,20 @@ def run_prediction_baseline(
     val_scores = compute_disagreement_score(base_val_preds, val_preds)
     test_scores = compute_disagreement_score(base_test_preds, test_preds)
 
+    threshold = threshold_from_validation(np.array(val_scores), threshold_percentile)
+    metrics = evaluate_test(test_scores, test_segments, test_labels, threshold)
+    percentile_results, best_percentile_result = sweep_percentiles(
+        np.array(val_scores),
+        test_scores,
+        test_segments,
+        test_labels
+    )
+
+    per_time_scores = _assign_scores_to_timepoints(len(test_route), test_segments, test_scores)
+    metrics['threshold'] = float(threshold)
+    metrics['percentile_results'] = percentile_results
+    metrics['best_percentile_result'] = best_percentile_result
+    metrics['per_time_scores'] = per_time_scores
     val_score_stats = summarize_scores(val_scores)
 
     threshold = threshold_from_validation(np.array(val_scores), threshold_percentile)
