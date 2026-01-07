@@ -14,6 +14,7 @@ from typing import Dict, Iterable, List, Tuple
 import numpy as np
 import pandas as pd
 import torch
+import textwrap
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
@@ -256,6 +257,66 @@ def plot_score_histogram(scores: List[float], title: str = 'Score distribution')
     plt.ylabel('Count')
     plt.tight_layout()
     plt.show()
+
+
+def format_baseline_summary(results: Dict[str, object]) -> str:
+    val_stats = results.get('val_score_stats', {})
+    quantiles = val_stats.get('quantiles', {})
+    percentile_results = results.get('percentile_results', [])
+    best = results.get('best_percentile_result', {})
+
+    lines = [
+        "Prediction-baseline summary",
+        "-" * 30,
+        f"F1: {results.get('f1')}",
+        f"Precision: {results.get('precision')}",
+        f"Recall: {results.get('recall')}",
+        f"Threshold: {results.get('threshold')}",
+    ]
+
+    if val_stats:
+        lines.extend([
+            "",
+            "Validation score stats:",
+            f"  mean: {val_stats.get('mean')}",
+            f"  std: {val_stats.get('std')}",
+        ])
+        if quantiles:
+            lines.append("  quantiles:")
+            for key in sorted(quantiles.keys()):
+                lines.append(f"    {key}: {quantiles[key]}")
+
+    if best:
+        lines.extend([
+            "",
+            "Best percentile result:",
+            f"  percentile: {best.get('percentile')}",
+            f"  threshold: {best.get('threshold')}",
+            f"  f1: {best.get('f1')}",
+            f"  precision: {best.get('precision')}",
+            f"  recall: {best.get('recall')}",
+        ])
+
+    if percentile_results:
+        lines.append("")
+        lines.append("Percentile sweep:")
+        header = f"{'pct':>6}  {'thr':>8}  {'prec':>8}  {'rec':>8}  {'f1':>8}"
+        lines.append(header)
+        lines.append("-" * len(header))
+        for row in percentile_results:
+            lines.append(
+                f"{row.get('percentile', 0):>6.1f}  "
+                f"{row.get('threshold', 0):>8.3f}  "
+                f"{row.get('precision', 0):>8.3f}  "
+                f"{row.get('recall', 0):>8.3f}  "
+                f"{row.get('f1', 0):>8.3f}"
+            )
+
+    return textwrap.dedent("\n".join(lines)).strip()
+
+
+def print_baseline_summary(results: Dict[str, object]) -> None:
+    print(format_baseline_summary(results))
 
 
 def evaluate_test(

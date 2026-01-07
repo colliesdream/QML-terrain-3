@@ -67,6 +67,8 @@ from .prediction_baseline import (
     train_predictor,
     generate_predicted_route,
     compute_disagreement_score,
+    format_baseline_summary,
+    print_baseline_summary,
     threshold_from_validation,
     evaluate_test,
     run_prediction_baseline
@@ -84,5 +86,6 @@ __all__ = [
     'run_complete_pipeline',
     'segment_route', 'build_dataset', 'LSTMPredictor', 'train_predictor',
     'generate_predicted_route', 'compute_disagreement_score',
+    'format_baseline_summary', 'print_baseline_summary',
     'threshold_from_validation', 'evaluate_test', 'run_prediction_baseline'
 ]
