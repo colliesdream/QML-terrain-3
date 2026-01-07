@@ -224,6 +224,40 @@ def threshold_from_validation(scores: np.ndarray, percentile: float = 99.5) -> f
     return float(np.percentile(valid, percentile)) if len(valid) > 0 else 0.0
 
 
+def summarize_scores(
+    scores: List[float],
+    quantiles: Iterable[float] = (0.0, 0.25, 0.5, 0.75, 1.0),
+) -> Dict[str, object]:
+    values = np.asarray(scores, dtype=np.float64)
+    if values.size == 0:
+        return {
+            'mean': 0.0,
+            'std': 0.0,
+            'quantiles': {},
+        }
+    quantile_values = np.quantile(values, list(quantiles))
+    quantile_stats = {
+        f"q{int(q * 100):02d}": float(v) for q, v in zip(quantiles, quantile_values)
+    }
+    return {
+        'mean': float(values.mean()),
+        'std': float(values.std()),
+        'quantiles': quantile_stats,
+    }
+
+
+def plot_score_histogram(scores: List[float], title: str = 'Score distribution') -> None:
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(6, 4))
+    plt.hist(scores, bins=30, color='steelblue', alpha=0.8)
+    plt.title(title)
+    plt.xlabel('Score')
+    plt.ylabel('Count')
+    plt.tight_layout()
+    plt.show()
+
+
 def evaluate_test(
     scores: List[float],
     test_segments: List[MotherSegment],
@@ -283,14 +317,14 @@ def run_prediction_baseline(
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     threshold_percentile: float = 99.5,
-) -> Dict[str, float]:
+) -> Dict[str, object]:
     train_route, _ = load_route(f"{data_dir}/train.csv")
     val_route, _ = load_route(f"{data_dir}/val.csv")
     test_route, test_labels = load_route(f"{data_dir}/test.csv")
 
     train_segments = segment_route(train_route, length, stride)
     model = LSTMPredictor(train_route.shape[1])
-    train_predictor(
+    train_history = train_predictor(
         model,
         train_segments,
         epochs=epochs,
@@ -333,4 +367,14 @@ def run_prediction_baseline(
     metrics['percentile_results'] = percentile_results
     metrics['best_percentile_result'] = best_percentile_result
     metrics['per_time_scores'] = per_time_scores
+    val_score_stats = summarize_scores(val_scores)
+
+    threshold = threshold_from_validation(np.array(val_scores), threshold_percentile)
+    metrics = evaluate_test(test_scores, test_segments, test_labels, threshold)
+
+    per_time_scores = _assign_scores_to_timepoints(len(test_route), test_segments, test_scores)
+    metrics['threshold'] = float(threshold)
+    metrics['per_time_scores'] = per_time_scores
+    metrics['train_history'] = train_history
+    metrics['val_score_stats'] = val_score_stats
     return metrics
