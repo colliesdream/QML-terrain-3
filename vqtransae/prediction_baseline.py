@@ -220,6 +220,31 @@ def _assign_scores_to_timepoints(
     return per_time
 
 
+def summarize_window_coverage(route_len: int, segments: List[MotherSegment]) -> Dict[str, object]:
+    if route_len <= 0:
+        return {
+            'total_points': 0,
+            'total_windows': 0,
+            'min_cover': 0,
+            'max_cover': 0,
+            'mean_cover': 0.0,
+            'cover_histogram': {},
+        }
+    coverage = np.zeros(route_len, dtype=np.int32)
+    for seg in segments:
+        coverage[seg.start:seg.end] += 1
+    unique, counts = np.unique(coverage, return_counts=True)
+    histogram = {int(k): int(v) for k, v in zip(unique, counts)}
+    return {
+        'total_points': int(route_len),
+        'total_windows': int(len(segments)),
+        'min_cover': int(coverage.min()),
+        'max_cover': int(coverage.max()),
+        'mean_cover': float(coverage.mean()),
+        'cover_histogram': histogram,
+    }
+
+
 def threshold_from_validation(scores: np.ndarray, percentile: float = 99.5) -> float:
     valid = scores[np.isfinite(scores)]
     return float(np.percentile(valid, percentile)) if len(valid) > 0 else 0.0
@@ -264,6 +289,8 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
     quantiles = val_stats.get('quantiles', {})
     percentile_results = results.get('percentile_results', [])
     best = results.get('best_percentile_result', {})
+    route_stats = results.get('route_stats', {})
+    window_params = results.get('window_params', {})
 
     lines = [
         "Prediction-baseline summary",
@@ -285,6 +312,29 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
             lines.append("  quantiles:")
             for key in sorted(quantiles.keys()):
                 lines.append(f"    {key}: {quantiles[key]}")
+
+    if route_stats:
+        lines.extend([
+            "",
+            "Route/window stats:",
+        ])
+        if window_params:
+            lines.extend([
+                f"  window_length: {window_params.get('length')}",
+                f"  window_stride: {window_params.get('stride')}",
+            ])
+        for name in ('train', 'val', 'test'):
+            stats = route_stats.get(name, {})
+            if not stats:
+                continue
+            lines.extend([
+                f"  {name}:",
+                f"    total_points: {stats.get('total_points')}",
+                f"    total_windows: {stats.get('total_windows')}",
+                f"    min_cover: {stats.get('min_cover')}",
+                f"    max_cover: {stats.get('max_cover')}",
+                f"    mean_cover: {stats.get('mean_cover')}",
+            ])
 
     if best:
         lines.extend([
@@ -414,6 +464,15 @@ def run_prediction_baseline(
     val_scores = compute_disagreement_score(base_val_preds, val_preds)
     test_scores = compute_disagreement_score(base_test_preds, test_preds)
     val_score_stats = summarize_scores(val_scores)
+    route_stats = {
+        'train': summarize_window_coverage(len(train_route), train_segments),
+        'val': summarize_window_coverage(len(val_route), val_segments),
+        'test': summarize_window_coverage(len(test_route), test_segments),
+    }
+    window_params = {
+        'length': int(length),
+        'stride': int(stride),
+    }
 
     threshold = threshold_from_validation(np.array(val_scores), threshold_percentile)
     metrics = evaluate_test(test_scores, test_segments, test_labels, threshold)
@@ -431,4 +490,6 @@ def run_prediction_baseline(
     metrics['per_time_scores'] = per_time_scores
     metrics['train_history'] = train_history
     metrics['val_score_stats'] = val_score_stats
+    metrics['route_stats'] = route_stats
+    metrics['window_params'] = window_params
     return metrics
