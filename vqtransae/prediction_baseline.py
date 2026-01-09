@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import torch
 import textwrap
+from sklearn.metrics import average_precision_score
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
@@ -298,6 +299,7 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
         f"F1: {results.get('f1')}",
         f"Precision: {results.get('precision')}",
         f"Recall: {results.get('recall')}",
+        f"PR_AUC: {results.get('pr_auc')}",
         f"Threshold: {results.get('threshold')}",
     ]
 
@@ -375,10 +377,16 @@ def evaluate_test(
     test_labels: np.ndarray,
     threshold: float,
 ) -> Dict[str, float]:
-    preds = np.array(scores) > threshold
+    score_array = np.array(scores, dtype=np.float64)
+    preds = score_array > threshold
     seg_labels = np.array([
         int(test_labels[seg.start:seg.end].max()) for seg in test_segments
     ])
+    valid_mask = np.isfinite(score_array)
+    if valid_mask.any() and seg_labels.size:
+        pr_auc = average_precision_score(seg_labels[valid_mask], score_array[valid_mask])
+    else:
+        pr_auc = 0.0
 
     tp = int(((preds == 1) & (seg_labels == 1)).sum())
     fp = int(((preds == 1) & (seg_labels == 0)).sum())
@@ -393,6 +401,7 @@ def evaluate_test(
         'precision': float(precision),
         'recall': float(recall),
         'f1': float(f1),
+        'pr_auc': float(pr_auc),
         'tp': tp,
         'fp': fp,
         'tn': tn,
