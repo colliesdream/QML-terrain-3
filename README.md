@@ -12,6 +12,18 @@ VQTransAE combines:
 
 The model learns normal road patterns from accelerometer data and detects anomalies (potholes, cracks, bumps) based on reconstruction error and quantization distance.
 
+## Prediction-Baseline (Primary Track)
+
+This repository also includes a **prediction-reference baseline** that is the primary track for this project. It trains a lightweight LSTM predictor on clean data, generates predicted routes for a clean reference and the target route, and flags anomalies by the **disagreement between the two predicted routes**. This approach keeps the pipeline simple while providing a strong, interpretable baseline for anomaly detection.
+
+Key ideas:
+- **Train on clean segments only**: learns to predict the second half of a window from the first half.
+- **Reference vs target prediction**: compare predictions from a clean reference route to predictions on val/test.
+- **Threshold from validation**: set anomaly threshold using a validation-score percentile.
+
+Entry point:
+- `vqtransae/prediction_baseline.py` → `run_prediction_baseline(...)`
+
 ## Project Structure
 
 ```
@@ -24,6 +36,7 @@ vqtransae/
 ├── evaluate.py     # Scoring and evaluation metrics
 ├── visualize.py    # Plotting functions
 ├── pipeline.py     # End-to-end pipeline
+├── prediction_baseline.py # Prediction-reference LSTM baseline (primary track)
 ├── __init__.py     # Package exports
 └── requirements.txt
 run_vqtransae.py    # Main entry script
