@@ -405,7 +405,7 @@ def sweep_percentiles(
     test_scores: List[float],
     test_segments: List[MotherSegment],
     test_labels: np.ndarray,
-    percentiles: Iterable[float] = (50, 60, 70, 80, 90, 95, 97, 98, 99, 99.5),
+    percentiles: Iterable[float] = (10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 97, 98, 99, 99.5),
 ) -> Tuple[List[Dict[str, float]], Dict[str, float]]:
     results: List[Dict[str, float]] = []
     for pct in percentiles:
