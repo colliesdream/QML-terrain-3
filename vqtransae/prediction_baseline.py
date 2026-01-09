@@ -371,27 +371,35 @@ def print_baseline_summary(results: Dict[str, object]) -> None:
     print(format_baseline_summary(results))
 
 
-def evaluate_test(
-    scores: List[float],
-    test_segments: List[MotherSegment],
-    test_labels: np.ndarray,
+def evaluate_pointwise(
+    scores: np.ndarray,
+    labels: np.ndarray,
     threshold: float,
 ) -> Dict[str, float]:
-    score_array = np.array(scores, dtype=np.float64)
-    preds = score_array > threshold
-    seg_labels = np.array([
-        int(test_labels[seg.start:seg.end].max()) for seg in test_segments
-    ])
+    score_array = np.asarray(scores, dtype=np.float64)
+    label_array = np.asarray(labels, dtype=np.int32)
     valid_mask = np.isfinite(score_array)
-    if valid_mask.any() and seg_labels.size:
-        pr_auc = average_precision_score(seg_labels[valid_mask], score_array[valid_mask])
-    else:
-        pr_auc = 0.0
+    score_array = score_array[valid_mask]
+    label_array = label_array[valid_mask]
+    if score_array.size == 0 or label_array.size == 0:
+        return {
+            'precision': 0.0,
+            'recall': 0.0,
+            'f1': 0.0,
+            'pr_auc': 0.0,
+            'tp': 0,
+            'fp': 0,
+            'tn': 0,
+            'fn': 0,
+        }
 
-    tp = int(((preds == 1) & (seg_labels == 1)).sum())
-    fp = int(((preds == 1) & (seg_labels == 0)).sum())
-    tn = int(((preds == 0) & (seg_labels == 0)).sum())
-    fn = int(((preds == 0) & (seg_labels == 1)).sum())
+    preds = score_array > threshold
+    pr_auc = average_precision_score(label_array, score_array)
+
+    tp = int(((preds == 1) & (label_array == 1)).sum())
+    fp = int(((preds == 1) & (label_array == 0)).sum())
+    tn = int(((preds == 0) & (label_array == 0)).sum())
+    fn = int(((preds == 0) & (label_array == 1)).sum())
 
     precision = tp / (tp + fp + 1e-8)
     recall = tp / (tp + fn + 1e-8)
@@ -411,15 +419,14 @@ def evaluate_test(
 
 def sweep_percentiles(
     val_scores: np.ndarray,
-    test_scores: List[float],
-    test_segments: List[MotherSegment],
+    test_scores: np.ndarray,
     test_labels: np.ndarray,
     percentiles: Iterable[float] = (10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 97, 98, 99, 99.5),
 ) -> Tuple[List[Dict[str, float]], Dict[str, float]]:
     results: List[Dict[str, float]] = []
     for pct in percentiles:
         threshold = threshold_from_validation(val_scores, pct)
-        metrics = evaluate_test(test_scores, test_segments, test_labels, threshold)
+        metrics = evaluate_pointwise(test_scores, test_labels, threshold)
         results.append({
             'percentile': float(pct),
             'threshold': float(threshold),
@@ -483,20 +490,21 @@ def run_prediction_baseline(
         'stride': int(stride),
     }
 
-    threshold = threshold_from_validation(np.array(val_scores), threshold_percentile)
-    metrics = evaluate_test(test_scores, test_segments, test_labels, threshold)
+    val_per_time_scores = _assign_scores_to_timepoints(len(val_route), val_segments, val_scores)
+    test_per_time_scores = _assign_scores_to_timepoints(len(test_route), test_segments, test_scores)
+
+    threshold = threshold_from_validation(val_per_time_scores, threshold_percentile)
+    metrics = evaluate_pointwise(test_per_time_scores, test_labels, threshold)
     percentile_results, best_percentile_result = sweep_percentiles(
-        np.array(val_scores),
-        test_scores,
-        test_segments,
-        test_labels
+        val_per_time_scores,
+        test_per_time_scores,
+        test_labels,
     )
 
-    per_time_scores = _assign_scores_to_timepoints(len(test_route), test_segments, test_scores)
     metrics['threshold'] = float(threshold)
     metrics['percentile_results'] = percentile_results
     metrics['best_percentile_result'] = best_percentile_result
-    metrics['per_time_scores'] = per_time_scores
+    metrics['per_time_scores'] = test_per_time_scores
     metrics['train_history'] = train_history
     metrics['val_score_stats'] = val_score_stats
     metrics['route_stats'] = route_stats
