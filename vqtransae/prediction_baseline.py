@@ -70,6 +70,46 @@ def segment_route(route: np.ndarray, length: int, stride: int) -> List[MotherSeg
     return segments
 
 
+def _smoothness_score(window: np.ndarray, second_weight: float = 1.0) -> float:
+    if window.shape[0] < 2:
+        return 0.0
+    first_diff = np.diff(window, axis=0)
+    first_score = float(np.mean(np.linalg.norm(first_diff, axis=1)))
+    if window.shape[0] < 3:
+        return first_score
+    second_diff = np.diff(window, n=2, axis=0)
+    second_score = float(np.mean(np.linalg.norm(second_diff, axis=1)))
+    return first_score + second_weight * second_score
+
+
+def build_smooth_route(
+    route: np.ndarray,
+    length: int,
+    stride: int,
+    keep_percent: float,
+    second_weight: float = 1.0,
+    select_stride: int | None = None,
+) -> np.ndarray:
+    if keep_percent >= 100.0:
+        return route
+    if keep_percent <= 0.0 or length <= 0:
+        return route[:0]
+    step = select_stride if select_stride is not None else length
+    windows = []
+    scores = []
+    for start in range(0, len(route) - length + 1, step):
+        window = route[start:start + length]
+        windows.append(window)
+        scores.append(_smoothness_score(window, second_weight=second_weight))
+    if not windows:
+        return route[:0]
+    keep_count = max(1, int(len(windows) * keep_percent / 100.0))
+    ranked_idx = np.argsort(scores)[:keep_count]
+    ranked_idx = np.sort(ranked_idx)
+    selected = [windows[i] for i in ranked_idx]
+    return np.concatenate(selected, axis=0) if selected else route[:0]
+
+
 class MotherSegmentDataset(Dataset):
     def __init__(self, segments: Iterable[MotherSegment]):
         self.segments = list(segments)
@@ -444,12 +484,23 @@ def run_prediction_baseline(
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     threshold_percentile: float = 99.5,
+    smooth_keep_percent: float = 100.0,
+    smooth_second_weight: float = 1.0,
+    smooth_select_stride: int | None = None,
 ) -> Dict[str, object]:
     train_route, _ = load_route(f"{data_dir}/train.csv")
     val_route, _ = load_route(f"{data_dir}/val.csv")
     test_route, test_labels = load_route(f"{data_dir}/test.csv")
 
-    train_segments = segment_route(train_route, length, stride)
+    smooth_train_route = build_smooth_route(
+        train_route,
+        length,
+        stride,
+        keep_percent=smooth_keep_percent,
+        second_weight=smooth_second_weight,
+        select_stride=smooth_select_stride,
+    )
+    train_segments = segment_route(smooth_train_route, length, stride)
     model = LSTMPredictor(train_route.shape[1])
     train_history = train_predictor(
         model,
