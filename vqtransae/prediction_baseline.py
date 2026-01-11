@@ -345,6 +345,7 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
     val_stats = results.get('val_score_stats', {})
     quantiles = val_stats.get('quantiles', {})
     percentile_results = results.get('percentile_results', [])
+    train_thresholds = results.get('train_percentile_thresholds', [])
     best = results.get('best_percentile_result', {})
     route_stats = results.get('route_stats', {})
     window_params = results.get('window_params', {})
@@ -443,6 +444,18 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
                 f"{row.get('f1', 0):>8.3f}"
             )
 
+    if train_thresholds:
+        lines.append("")
+        lines.append("Train percentile thresholds:")
+        header = f"{'pct':>6}  {'thr':>8}"
+        lines.append(header)
+        lines.append("-" * len(header))
+        for row in train_thresholds:
+            lines.append(
+                f"{row.get('percentile', 0):>6.1f}  "
+                f"{row.get('threshold', 0):>8.3f}"
+            )
+
     return textwrap.dedent("\n".join(lines)).strip()
 
 
@@ -515,6 +528,20 @@ def sweep_percentiles(
     return results, best
 
 
+def summarize_thresholds(
+    scores: np.ndarray,
+    percentiles: Iterable[float],
+) -> List[Dict[str, float]]:
+    summary = []
+    for pct in percentiles:
+        threshold = threshold_from_validation(scores, pct)
+        summary.append({
+            'percentile': float(pct),
+            'threshold': float(threshold),
+        })
+    return summary
+
+
 def run_prediction_baseline(
     data_dir: str = Config.PROCESSED_DATA_DIR,
     length: int = 128,
@@ -527,6 +554,7 @@ def run_prediction_baseline(
     smooth_second_weight: float = 1.0,
     smooth_select_stride: int | None = None,
 ) -> Dict[str, object]:
+    percentiles = (10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 97, 98, 99, 99.5)
     train_route, _ = load_route(f"{data_dir}/train.csv")
     val_route, _ = load_route(f"{data_dir}/val.csv")
     test_route, test_labels = load_route(f"{data_dir}/test.csv")
@@ -594,6 +622,7 @@ def run_prediction_baseline(
         'select_stride': int(smooth_select_stride) if smooth_select_stride is not None else None,
     }
 
+    train_per_time_scores = _assign_scores_to_timepoints(len(train_route), train_segments, train_scores)
     val_per_time_scores = _assign_scores_to_timepoints(len(val_route), val_segments, val_scores)
     test_per_time_scores = _assign_scores_to_timepoints(len(test_route), test_segments, test_scores)
 
@@ -603,11 +632,14 @@ def run_prediction_baseline(
         val_per_time_scores,
         test_per_time_scores,
         test_labels,
+        percentiles=percentiles,
     )
+    train_thresholds = summarize_thresholds(train_per_time_scores, percentiles)
 
     metrics['threshold'] = float(threshold)
     metrics['percentile_results'] = percentile_results
     metrics['best_percentile_result'] = best_percentile_result
+    metrics['train_percentile_thresholds'] = train_thresholds
     metrics['per_time_scores'] = test_per_time_scores
     metrics['train_history'] = train_history
     metrics['train_score_stats'] = train_score_stats
