@@ -341,6 +341,7 @@ def plot_score_histogram(scores: List[float], title: str = 'Score distribution')
 
 
 def format_baseline_summary(results: Dict[str, object]) -> str:
+    train_stats = results.get('train_score_stats', {})
     val_stats = results.get('val_score_stats', {})
     quantiles = val_stats.get('quantiles', {})
     percentile_results = results.get('percentile_results', [])
@@ -358,6 +359,19 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
         f"PR_AUC: {results.get('pr_auc')}",
         f"Threshold: {results.get('threshold')}",
     ]
+
+    if train_stats:
+        lines.extend([
+            "",
+            "Train score stats:",
+            f"  mean: {train_stats.get('mean')}",
+            f"  std: {train_stats.get('std')}",
+        ])
+        train_quantiles = train_stats.get('quantiles', {})
+        if train_quantiles:
+            lines.append("  quantiles:")
+            for key in sorted(train_quantiles.keys()):
+                lines.append(f"    {key}: {train_quantiles[key]}")
 
     if val_stats:
         lines.extend([
@@ -535,9 +549,12 @@ def run_prediction_baseline(
         learning_rate=learning_rate,
     )
 
-    reference_route = np.concatenate([train_route, val_route], axis=0)
+    reference_route = train_route
     base_segments, base_preds = generate_predicted_route(
         model, reference_route, length, stride
+    )
+    train_segments, train_preds = generate_predicted_route(
+        model, train_route, length, stride
     )
     val_segments, val_preds = generate_predicted_route(
         model, val_route, length, stride
@@ -549,12 +566,17 @@ def run_prediction_baseline(
     _, base_val_preds, val_segments, val_preds = _align_by_macro(
         base_segments, base_preds, val_segments, val_preds
     )
+    _, base_train_preds, train_segments, train_preds = _align_by_macro(
+        base_segments, base_preds, train_segments, train_preds
+    )
     _, base_test_preds, test_segments, test_preds = _align_by_macro(
         base_segments, base_preds, test_segments, test_preds
     )
 
+    train_scores = compute_disagreement_score(base_train_preds, train_preds)
     val_scores = compute_disagreement_score(base_val_preds, val_preds)
     test_scores = compute_disagreement_score(base_test_preds, test_preds)
+    train_score_stats = summarize_scores(train_scores)
     val_score_stats = summarize_scores(val_scores)
     route_stats = {
         'train': summarize_window_coverage(len(train_route), train_segments),
@@ -588,6 +610,7 @@ def run_prediction_baseline(
     metrics['best_percentile_result'] = best_percentile_result
     metrics['per_time_scores'] = test_per_time_scores
     metrics['train_history'] = train_history
+    metrics['train_score_stats'] = train_score_stats
     metrics['val_score_stats'] = val_score_stats
     metrics['route_stats'] = route_stats
     metrics['window_params'] = window_params
