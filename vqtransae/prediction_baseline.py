@@ -89,11 +89,17 @@ def build_smooth_route(
     keep_percent: float,
     second_weight: float = 1.0,
     select_stride: int | None = None,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, Dict[str, int]]:
     if keep_percent >= 100.0:
-        return route
+        return route, {
+            'selection_windows': 0,
+            'total_windows': 0,
+        }
     if keep_percent <= 0.0 or length <= 0:
-        return route[:0]
+        return route[:0], {
+            'selection_windows': 0,
+            'total_windows': 0,
+        }
     step = select_stride if select_stride is not None else length
     windows = []
     scores = []
@@ -102,12 +108,21 @@ def build_smooth_route(
         windows.append(window)
         scores.append(_smoothness_score(window, second_weight=second_weight))
     if not windows:
-        return route[:0]
+        return route[:0], {
+            'selection_windows': 0,
+            'total_windows': 0,
+        }
     keep_count = max(1, int(len(windows) * keep_percent / 100.0))
     ranked_idx = np.argsort(scores)[:keep_count]
     ranked_idx = np.sort(ranked_idx)
     selected = [windows[i] for i in ranked_idx]
-    return np.concatenate(selected, axis=0) if selected else route[:0]
+    return (
+        np.concatenate(selected, axis=0) if selected else route[:0],
+        {
+            'selection_windows': int(len(selected)),
+            'total_windows': int(len(windows)),
+        },
+    )
 
 
 class MotherSegmentDataset(Dataset):
@@ -326,12 +341,14 @@ def plot_score_histogram(scores: List[float], title: str = 'Score distribution')
 
 
 def format_baseline_summary(results: Dict[str, object]) -> str:
+    train_stats = results.get('train_score_stats', {})
     val_stats = results.get('val_score_stats', {})
     quantiles = val_stats.get('quantiles', {})
     percentile_results = results.get('percentile_results', [])
     best = results.get('best_percentile_result', {})
     route_stats = results.get('route_stats', {})
     window_params = results.get('window_params', {})
+    smooth_stats = results.get('smooth_stats', {})
 
     lines = [
         "Prediction-baseline summary",
@@ -342,6 +359,19 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
         f"PR_AUC: {results.get('pr_auc')}",
         f"Threshold: {results.get('threshold')}",
     ]
+
+    if train_stats:
+        lines.extend([
+            "",
+            "Train score stats:",
+            f"  mean: {train_stats.get('mean')}",
+            f"  std: {train_stats.get('std')}",
+        ])
+        train_quantiles = train_stats.get('quantiles', {})
+        if train_quantiles:
+            lines.append("  quantiles:")
+            for key in sorted(train_quantiles.keys()):
+                lines.append(f"    {key}: {train_quantiles[key]}")
 
     if val_stats:
         lines.extend([
@@ -364,6 +394,15 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
             lines.extend([
                 f"  window_length: {window_params.get('length')}",
                 f"  window_stride: {window_params.get('stride')}",
+            ])
+        if smooth_stats:
+            lines.extend([
+                "  smooth_selection:",
+                f"    keep_percent: {smooth_stats.get('keep_percent')}",
+                f"    second_weight: {smooth_stats.get('second_weight')}",
+                f"    select_stride: {smooth_stats.get('select_stride')}",
+                f"    selection_windows: {smooth_stats.get('selection_windows')}",
+                f"    total_windows: {smooth_stats.get('total_windows')}",
             ])
         for name in ('train', 'val', 'test'):
             stats = route_stats.get(name, {})
@@ -492,7 +531,7 @@ def run_prediction_baseline(
     val_route, _ = load_route(f"{data_dir}/val.csv")
     test_route, test_labels = load_route(f"{data_dir}/test.csv")
 
-    smooth_train_route = build_smooth_route(
+    smooth_train_route, smooth_stats = build_smooth_route(
         train_route,
         length,
         stride,
@@ -510,9 +549,12 @@ def run_prediction_baseline(
         learning_rate=learning_rate,
     )
 
-    reference_route = np.concatenate([train_route, val_route], axis=0)
+    reference_route = train_route
     base_segments, base_preds = generate_predicted_route(
         model, reference_route, length, stride
+    )
+    train_segments, train_preds = generate_predicted_route(
+        model, train_route, length, stride
     )
     val_segments, val_preds = generate_predicted_route(
         model, val_route, length, stride
@@ -524,12 +566,17 @@ def run_prediction_baseline(
     _, base_val_preds, val_segments, val_preds = _align_by_macro(
         base_segments, base_preds, val_segments, val_preds
     )
+    _, base_train_preds, train_segments, train_preds = _align_by_macro(
+        base_segments, base_preds, train_segments, train_preds
+    )
     _, base_test_preds, test_segments, test_preds = _align_by_macro(
         base_segments, base_preds, test_segments, test_preds
     )
 
+    train_scores = compute_disagreement_score(base_train_preds, train_preds)
     val_scores = compute_disagreement_score(base_val_preds, val_preds)
     test_scores = compute_disagreement_score(base_test_preds, test_preds)
+    train_score_stats = summarize_scores(train_scores)
     val_score_stats = summarize_scores(val_scores)
     route_stats = {
         'train': summarize_window_coverage(len(train_route), train_segments),
@@ -539,6 +586,12 @@ def run_prediction_baseline(
     window_params = {
         'length': int(length),
         'stride': int(stride),
+    }
+    smooth_stats = {
+        **smooth_stats,
+        'keep_percent': float(smooth_keep_percent),
+        'second_weight': float(smooth_second_weight),
+        'select_stride': int(smooth_select_stride) if smooth_select_stride is not None else None,
     }
 
     val_per_time_scores = _assign_scores_to_timepoints(len(val_route), val_segments, val_scores)
@@ -557,7 +610,9 @@ def run_prediction_baseline(
     metrics['best_percentile_result'] = best_percentile_result
     metrics['per_time_scores'] = test_per_time_scores
     metrics['train_history'] = train_history
+    metrics['train_score_stats'] = train_score_stats
     metrics['val_score_stats'] = val_score_stats
     metrics['route_stats'] = route_stats
     metrics['window_params'] = window_params
+    metrics['smooth_stats'] = smooth_stats
     return metrics
