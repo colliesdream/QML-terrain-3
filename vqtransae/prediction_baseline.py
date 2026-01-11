@@ -361,6 +361,7 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
     percentile_results = results.get('percentile_results', [])
     train_thresholds = results.get('train_percentile_thresholds', [])
     best = results.get('best_percentile_result', {})
+    train_threshold_metrics = results.get('train_threshold_metrics', {})
     route_stats = results.get('route_stats', {})
     window_params = results.get('window_params', {})
     smooth_stats = results.get('smooth_stats', {})
@@ -441,6 +442,17 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
             f"  f1: {best.get('f1')}",
             f"  precision: {best.get('precision')}",
             f"  recall: {best.get('recall')}",
+        ])
+
+    if train_threshold_metrics:
+        lines.extend([
+            "",
+            "Train-threshold metrics (test set):",
+            f"  threshold: {results.get('train_threshold')}",
+            f"  precision: {train_threshold_metrics.get('precision')}",
+            f"  recall: {train_threshold_metrics.get('recall')}",
+            f"  f1: {train_threshold_metrics.get('f1')}",
+            f"  pr_auc: {train_threshold_metrics.get('pr_auc')}",
         ])
 
     if percentile_results:
@@ -646,7 +658,9 @@ def run_prediction_baseline(
     test_per_time_scores = _assign_scores_to_timepoints(len(test_route), test_segments, test_scores)
 
     threshold = threshold_from_validation(val_per_time_scores, threshold_percentile)
+    train_threshold = threshold_from_validation(train_per_time_scores, threshold_percentile)
     metrics = evaluate_pointwise(test_per_time_scores, test_labels, threshold)
+    train_threshold_metrics = evaluate_pointwise(test_per_time_scores, test_labels, train_threshold)
     percentile_results, best_percentile_result = sweep_percentiles(
         val_per_time_scores,
         test_per_time_scores,
@@ -656,6 +670,8 @@ def run_prediction_baseline(
     train_thresholds = summarize_thresholds(train_per_time_scores, percentiles)
 
     metrics['threshold'] = float(threshold)
+    metrics['train_threshold'] = float(train_threshold)
+    metrics['train_threshold_metrics'] = train_threshold_metrics
     metrics['percentile_results'] = percentile_results
     metrics['best_percentile_result'] = best_percentile_result
     metrics['train_percentile_thresholds'] = train_thresholds
