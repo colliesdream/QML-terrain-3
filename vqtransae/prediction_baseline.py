@@ -596,6 +596,9 @@ def run_prediction_baseline(
     base_segments, base_preds = generate_predicted_route(
         model, reference_route, length, stride
     )
+    train_segments, train_preds = generate_predicted_route(
+        model, train_route, length, stride
+    )
     val_segments, val_preds = generate_predicted_route(
         model, val_route, length, stride
     )
@@ -605,6 +608,9 @@ def run_prediction_baseline(
 
     _, base_val_preds, val_segments, val_preds = _align_by_macro(
         base_segments, base_preds, val_segments, val_preds
+    )
+    _, base_train_preds, train_segments, train_preds = _align_by_macro(
+        base_segments, base_preds, train_segments, train_preds
     )
     _, base_test_preds, test_segments, test_preds = _align_by_macro(
         base_segments, base_preds, test_segments, test_preds
