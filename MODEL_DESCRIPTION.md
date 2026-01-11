@@ -1,7 +1,7 @@
 # Prediction-Reference Baseline (LSTM Predictor)
 
 ## Overview
-This baseline is a **sequence-to-sequence LSTM predictor** that learns to predict the **post window** from the **pre window** within each **mother segment**. After training on clean data, the same predictor is used to generate predicted routes for a clean reference (base) and for target routes (val/test). Anomalies are flagged by **disagreement between predicted routes** rather than by direct reconstruction error.
+This baseline is a **sequence-to-sequence LSTM predictor** that learns to predict the **post window** from the **pre window** within each **mother segment**. After training on clean data, the same predictor is used to generate predicted routes for a clean reference (base) and for target routes (val/test). Anomalies are flagged by **disagreement between predicted routes** rather than by direct reconstruction error. Train thresholds and summary stats now use a **post-only prediction error** on the training windows to provide a direct view of prediction quality.
 
 Key idea:
 - **Mother segment windowing**: each route is split into three macro segments, then into sliding windows (mother segments). Each window is split into **pre** and **post** halves.
@@ -43,7 +43,7 @@ This model is trained only on clean data, so it learns **normal predictive patte
 **Goal:** choose a decision threshold for anomaly scoring.
 
 1. Generate predicted routes for:
-   - **Base route** (clean training/validation data)
+   - **Base route** (clean training data only)
    - **Validation route**
 2. **Align by macro segment** so predictions are matched within the same macro section.
 3. Compute **window-level disagreement scores** (see below).
@@ -63,7 +63,7 @@ This model is trained only on clean data, so it learns **normal predictive patte
 **Goal:** compute anomaly scores and evaluate.
 
 1. Generate predicted routes for:
-   - **Base route** (clean reference)
+   - **Base route** (clean training reference)
    - **Test route**
 2. Align by macro segment.
 3. Compute window-level disagreement scores.
@@ -89,6 +89,24 @@ For each aligned window pair (`base_pred`, `test_pred`):
 
 **Meaning:** a window is anomalous if *any* time step shows a large predictive disagreement between base and test. This captures localized deviations.
 
+### 1b) Train window prediction error (post-only L2 max)
+For train windows, we compute a direct prediction error against the **ground-truth post** window:
+
+1. Compute per-time-step difference:
+   \[
+   E_t = \hat{Y}^{\text{train}}_t - Y^{\text{train}}_t
+   \]
+2. Compute L2 norm per time step:
+   \[
+   e_t = \lVert E_t \rVert_2
+   \]
+3. Take the maximum across time steps in the window:
+   \[
+   s^{\text{train}}_{\text{window}} = \max_t e_t
+   \]
+
+**Meaning:** this measures **post-only prediction error** for training windows and is used to derive train-based thresholds and stats.
+
 ### 2) Mapping window scores to timepoint scores
 Each mother segment score is mapped back onto its original time indices. If multiple windows cover the same timepoint, the **maximum** score is kept:
 
@@ -100,8 +118,9 @@ S_{\text{time}}[t] = \max_{\text{windows covering } t} s_{\text{window}}
 
 ## Summary of Processes and Their Scoring Meaning
 - **Training**: learns predictive capability using MSE loss; **not** anomaly scoring.
+- **Training stats**: computes post-only prediction error on train windows to summarize train quality and derive train-based thresholds.
 - **Validation**: computes window disagreement scores and sets threshold by percentile.
-- **Testing**: computes window disagreement scores, maps them to timepoints, and applies threshold for anomaly detection.
+- **Testing**: computes window disagreement scores, maps them to timepoints, and applies threshold for anomaly detection (including optional evaluation with the train-derived threshold).
 
 ## Final Evaluation Against Human Labels (Four Metrics)
 After obtaining **timepoint anomaly predictions** (by applying the threshold), the system compares them with **human-labeled anomaly ground truth** and computes four standard metrics:
@@ -127,3 +146,4 @@ After obtaining **timepoint anomaly predictions** (by applying the threshold), t
 - Anomaly scores are **not reconstruction errors**, but **disagreement between predicted routes**.
 - Scoring is window-based (max L2), then mapped to timepoints by max aggregation.
 - Validation chooses a threshold; testing applies it to produce anomalies.
+- The smoothing step reports how many windows were selected and concatenated to form the training subset.

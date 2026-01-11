@@ -89,11 +89,17 @@ def build_smooth_route(
     keep_percent: float,
     second_weight: float = 1.0,
     select_stride: int | None = None,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, Dict[str, int]]:
     if keep_percent >= 100.0:
-        return route
+        return route, {
+            'selection_windows': 0,
+            'total_windows': 0,
+        }
     if keep_percent <= 0.0 or length <= 0:
-        return route[:0]
+        return route[:0], {
+            'selection_windows': 0,
+            'total_windows': 0,
+        }
     step = select_stride if select_stride is not None else length
     windows = []
     scores = []
@@ -102,12 +108,21 @@ def build_smooth_route(
         windows.append(window)
         scores.append(_smoothness_score(window, second_weight=second_weight))
     if not windows:
-        return route[:0]
+        return route[:0], {
+            'selection_windows': 0,
+            'total_windows': 0,
+        }
     keep_count = max(1, int(len(windows) * keep_percent / 100.0))
     ranked_idx = np.argsort(scores)[:keep_count]
     ranked_idx = np.sort(ranked_idx)
     selected = [windows[i] for i in ranked_idx]
-    return np.concatenate(selected, axis=0) if selected else route[:0]
+    return (
+        np.concatenate(selected, axis=0) if selected else route[:0],
+        {
+            'selection_windows': int(len(selected)),
+            'total_windows': int(len(windows)),
+        },
+    )
 
 
 class MotherSegmentDataset(Dataset):
@@ -223,6 +238,20 @@ def compute_disagreement_score(
     return scores
 
 
+def compute_prediction_error_scores(
+    model: LSTMPredictor,
+    segments: Iterable[MotherSegment],
+    device: torch.device | None = None,
+) -> List[float]:
+    preds = _predict_segments(model, segments, device=device)
+    scores = []
+    for pred, seg in zip(preds, segments):
+        diffs = pred - seg.post
+        l2 = np.linalg.norm(diffs, axis=1)
+        scores.append(float(l2.max()))
+    return scores
+
+
 def _align_by_macro(
     base_segments: List[MotherSegment],
     base_preds: List[np.ndarray],
@@ -326,12 +355,16 @@ def plot_score_histogram(scores: List[float], title: str = 'Score distribution')
 
 
 def format_baseline_summary(results: Dict[str, object]) -> str:
+    train_stats = results.get('train_score_stats', {})
     val_stats = results.get('val_score_stats', {})
     quantiles = val_stats.get('quantiles', {})
     percentile_results = results.get('percentile_results', [])
+    train_thresholds = results.get('train_percentile_thresholds', [])
     best = results.get('best_percentile_result', {})
+    train_threshold_metrics = results.get('train_threshold_metrics', {})
     route_stats = results.get('route_stats', {})
     window_params = results.get('window_params', {})
+    smooth_stats = results.get('smooth_stats', {})
 
     lines = [
         "Prediction-baseline summary",
@@ -342,6 +375,19 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
         f"PR_AUC: {results.get('pr_auc')}",
         f"Threshold: {results.get('threshold')}",
     ]
+
+    if train_stats:
+        lines.extend([
+            "",
+            "Train score stats:",
+            f"  mean: {train_stats.get('mean')}",
+            f"  std: {train_stats.get('std')}",
+        ])
+        train_quantiles = train_stats.get('quantiles', {})
+        if train_quantiles:
+            lines.append("  quantiles:")
+            for key in sorted(train_quantiles.keys()):
+                lines.append(f"    {key}: {train_quantiles[key]}")
 
     if val_stats:
         lines.extend([
@@ -364,6 +410,15 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
             lines.extend([
                 f"  window_length: {window_params.get('length')}",
                 f"  window_stride: {window_params.get('stride')}",
+            ])
+        if smooth_stats:
+            lines.extend([
+                "  smooth_selection:",
+                f"    keep_percent: {smooth_stats.get('keep_percent')}",
+                f"    second_weight: {smooth_stats.get('second_weight')}",
+                f"    select_stride: {smooth_stats.get('select_stride')}",
+                f"    selection_windows: {smooth_stats.get('selection_windows')}",
+                f"    total_windows: {smooth_stats.get('total_windows')}",
             ])
         for name in ('train', 'val', 'test'):
             stats = route_stats.get(name, {})
@@ -389,6 +444,17 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
             f"  recall: {best.get('recall')}",
         ])
 
+    if train_threshold_metrics:
+        lines.extend([
+            "",
+            "Train-threshold metrics (test set):",
+            f"  threshold: {results.get('train_threshold')}",
+            f"  precision: {train_threshold_metrics.get('precision')}",
+            f"  recall: {train_threshold_metrics.get('recall')}",
+            f"  f1: {train_threshold_metrics.get('f1')}",
+            f"  pr_auc: {train_threshold_metrics.get('pr_auc')}",
+        ])
+
     if percentile_results:
         lines.append("")
         lines.append("Percentile sweep:")
@@ -402,6 +468,18 @@ def format_baseline_summary(results: Dict[str, object]) -> str:
                 f"{row.get('precision', 0):>8.3f}  "
                 f"{row.get('recall', 0):>8.3f}  "
                 f"{row.get('f1', 0):>8.3f}"
+            )
+
+    if train_thresholds:
+        lines.append("")
+        lines.append("Train percentile thresholds:")
+        header = f"{'pct':>6}  {'thr':>8}"
+        lines.append(header)
+        lines.append("-" * len(header))
+        for row in train_thresholds:
+            lines.append(
+                f"{row.get('percentile', 0):>6.1f}  "
+                f"{row.get('threshold', 0):>8.3f}"
             )
 
     return textwrap.dedent("\n".join(lines)).strip()
@@ -476,6 +554,20 @@ def sweep_percentiles(
     return results, best
 
 
+def summarize_thresholds(
+    scores: np.ndarray,
+    percentiles: Iterable[float],
+) -> List[Dict[str, float]]:
+    summary = []
+    for pct in percentiles:
+        threshold = threshold_from_validation(scores, pct)
+        summary.append({
+            'percentile': float(pct),
+            'threshold': float(threshold),
+        })
+    return summary
+
+
 def run_prediction_baseline(
     data_dir: str = Config.PROCESSED_DATA_DIR,
     length: int = 128,
@@ -488,11 +580,12 @@ def run_prediction_baseline(
     smooth_second_weight: float = 1.0,
     smooth_select_stride: int | None = None,
 ) -> Dict[str, object]:
+    percentiles = (10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 97, 98, 99, 99.5)
     train_route, _ = load_route(f"{data_dir}/train.csv")
     val_route, _ = load_route(f"{data_dir}/val.csv")
     test_route, test_labels = load_route(f"{data_dir}/test.csv")
 
-    smooth_train_route = build_smooth_route(
+    smooth_train_route, smooth_stats = build_smooth_route(
         train_route,
         length,
         stride,
@@ -501,6 +594,7 @@ def run_prediction_baseline(
         select_stride=smooth_select_stride,
     )
     train_segments = segment_route(smooth_train_route, length, stride)
+    train_score_segments = segment_route(train_route, length, stride)
     model = LSTMPredictor(train_route.shape[1])
     train_history = train_predictor(
         model,
@@ -510,7 +604,7 @@ def run_prediction_baseline(
         learning_rate=learning_rate,
     )
 
-    reference_route = np.concatenate([train_route, val_route], axis=0)
+    reference_route = train_route
     base_segments, base_preds = generate_predicted_route(
         model, reference_route, length, stride
     )
@@ -528,8 +622,10 @@ def run_prediction_baseline(
         base_segments, base_preds, test_segments, test_preds
     )
 
+    train_scores = compute_prediction_error_scores(model, train_score_segments)
     val_scores = compute_disagreement_score(base_val_preds, val_preds)
     test_scores = compute_disagreement_score(base_test_preds, test_preds)
+    train_score_stats = summarize_scores(train_scores)
     val_score_stats = summarize_scores(val_scores)
     route_stats = {
         'train': summarize_window_coverage(len(train_route), train_segments),
@@ -540,24 +636,44 @@ def run_prediction_baseline(
         'length': int(length),
         'stride': int(stride),
     }
+    smooth_stats = {
+        **smooth_stats,
+        'keep_percent': float(smooth_keep_percent),
+        'second_weight': float(smooth_second_weight),
+        'select_stride': int(smooth_select_stride) if smooth_select_stride is not None else None,
+    }
 
+    train_per_time_scores = _assign_scores_to_timepoints(
+        len(train_route),
+        train_score_segments,
+        train_scores,
+    )
     val_per_time_scores = _assign_scores_to_timepoints(len(val_route), val_segments, val_scores)
     test_per_time_scores = _assign_scores_to_timepoints(len(test_route), test_segments, test_scores)
 
     threshold = threshold_from_validation(val_per_time_scores, threshold_percentile)
+    train_threshold = threshold_from_validation(train_per_time_scores, threshold_percentile)
     metrics = evaluate_pointwise(test_per_time_scores, test_labels, threshold)
+    train_threshold_metrics = evaluate_pointwise(test_per_time_scores, test_labels, train_threshold)
     percentile_results, best_percentile_result = sweep_percentiles(
         val_per_time_scores,
         test_per_time_scores,
         test_labels,
+        percentiles=percentiles,
     )
+    train_thresholds = summarize_thresholds(train_per_time_scores, percentiles)
 
     metrics['threshold'] = float(threshold)
+    metrics['train_threshold'] = float(train_threshold)
+    metrics['train_threshold_metrics'] = train_threshold_metrics
     metrics['percentile_results'] = percentile_results
     metrics['best_percentile_result'] = best_percentile_result
+    metrics['train_percentile_thresholds'] = train_thresholds
     metrics['per_time_scores'] = test_per_time_scores
     metrics['train_history'] = train_history
+    metrics['train_score_stats'] = train_score_stats
     metrics['val_score_stats'] = val_score_stats
     metrics['route_stats'] = route_stats
     metrics['window_params'] = window_params
+    metrics['smooth_stats'] = smooth_stats
     return metrics
