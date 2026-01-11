@@ -238,6 +238,20 @@ def compute_disagreement_score(
     return scores
 
 
+def compute_prediction_error_scores(
+    model: LSTMPredictor,
+    segments: Iterable[MotherSegment],
+    device: torch.device | None = None,
+) -> List[float]:
+    preds = _predict_segments(model, segments, device=device)
+    scores = []
+    for pred, seg in zip(preds, segments):
+        diffs = pred - seg.post
+        l2 = np.linalg.norm(diffs, axis=1)
+        scores.append(float(l2.max()))
+    return scores
+
+
 def _align_by_macro(
     base_segments: List[MotherSegment],
     base_preds: List[np.ndarray],
@@ -568,6 +582,7 @@ def run_prediction_baseline(
         select_stride=smooth_select_stride,
     )
     train_segments = segment_route(smooth_train_route, length, stride)
+    train_score_segments = segment_route(train_route, length, stride)
     model = LSTMPredictor(train_route.shape[1])
     train_history = train_predictor(
         model,
@@ -601,7 +616,7 @@ def run_prediction_baseline(
         base_segments, base_preds, test_segments, test_preds
     )
 
-    train_scores = compute_disagreement_score(base_train_preds, train_preds)
+    train_scores = compute_prediction_error_scores(model, train_score_segments)
     val_scores = compute_disagreement_score(base_val_preds, val_preds)
     test_scores = compute_disagreement_score(base_test_preds, test_preds)
     train_score_stats = summarize_scores(train_scores)
@@ -622,7 +637,11 @@ def run_prediction_baseline(
         'select_stride': int(smooth_select_stride) if smooth_select_stride is not None else None,
     }
 
-    train_per_time_scores = _assign_scores_to_timepoints(len(train_route), train_segments, train_scores)
+    train_per_time_scores = _assign_scores_to_timepoints(
+        len(train_route),
+        train_score_segments,
+        train_scores,
+    )
     val_per_time_scores = _assign_scores_to_timepoints(len(val_route), val_segments, val_scores)
     test_per_time_scores = _assign_scores_to_timepoints(len(test_route), test_segments, test_scores)
 
