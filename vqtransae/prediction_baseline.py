@@ -232,9 +232,23 @@ def compute_disagreement_score(
 ) -> List[float]:
     scores = []
     for base, test in zip(base_preds, test_preds):
-        diffs = base - test
-        l2 = np.linalg.norm(diffs, axis=1)
-        scores.append(float(l2.max()))
+        base_mean = base.mean(axis=0)
+        test_mean = test.mean(axis=0)
+        scores.append(float(np.linalg.norm(base_mean - test_mean)))
+    return scores
+
+
+def compute_prediction_error_scores(
+    model: LSTMPredictor,
+    segments: Iterable[MotherSegment],
+    device: torch.device | None = None,
+) -> List[float]:
+    preds = _predict_segments(model, segments, device=device)
+    scores = []
+    for pred, seg in zip(preds, segments):
+        pred_mean = pred.mean(axis=0)
+        post_mean = seg.post.mean(axis=0)
+        scores.append(float(np.linalg.norm(pred_mean - post_mean)))
     return scores
 
 
